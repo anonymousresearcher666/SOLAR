@@ -1,115 +1,38 @@
 <meta name="robots" content="noindex">
-# SOLAR
+# SOLAR — Schema-Only Learning And Rule-extraction with Large Language Models
 
-A Knowledge Graph Rule Learning system that generates logical rules from knowledge graph schemas using Large Language Models (LLMs).
-
-## Overview
-
-This project provides tools for:
-- Extracting subschemas from knowledge graphs
-- Generating logical rules using various LLM models  
-- Consensus-based rule evaluation across multiple LLMs
-- Schema-aware rule generation with type checking
+SOLAR learns and ranks logical rules directly from knowledge‑graph schemas using LLMs. It supports two complementary ranking paths: a multi‑agent consensus debate and an independent evaluator pool aggregated via Borda. SOLAR is model‑agnostic — any LLM wired into `llm/call_models.py` can be used (OpenAI, Anthropic, Google, or local via Ollama).
 
 ## Core Components
 
-### Main Script (`main_SOLAR.py`)
-The primary entry point for rule generation that:
-- Loads datasets and schemas from specified paths
-- Supports multiple prompt types and schema formats
-- Generates rules using various LLM models in parallel
-- Saves generated rules and queries to organized directories
-
-**Supported Models:**
-- OpenAI: `gpt-4-turbo`, `gpt-4o`, `gpt-4o-mini`
-- Anthropic: `claude-3-5-sonnet-20240620`, `claude-3-opus-20240229`
-- Google: `gemini-1.5-flash`, `gemini-1.5-pro`
-- Ollama: `llama3`, `deepseek-r1`, `qwen2.5`, `gemma3`
-
-### Schema Rule Generator (`SchemaRuleGenerator.py`)
-Advanced rule generation with schema awareness:
-- Extracts subschemas centered on target predicates
-- Generates rules with proper variable chaining
-- Performs type checking using domain/range information
-- Supports different rule formatting options
-
-### Data Handling (`data.py`)
-Dataset management utilities:
-- Reads various schema formats (domain_range, graph, line)
-- Loads predicates and prompt templates
-- Parses schema nodes and edges
-- Extracts subschemas for focused rule generation
+### Main Entry (`main_SOLAR.py`)
+Generation and SPCA ranking orchestrator:
+- Generates rules via a coordinator LLM
+- Runs SPCA^{consensus} (debate) or SPCA^{pool} (independent ranking)
 
 ### LLM Integration (`llm/`)
-
-#### Model Interface (`call_models.py`)
-- Unified interface for multiple LLM providers
-- Token counting and truncation handling
-- Timeout configuration for reliable API calls
-- Support for local (Ollama) and cloud-based models
-
-#### Consensus System (`consensus_llms.py`)
-Multi-agent rule evaluation system:
-- Simulates debates between multiple LLM agents
-- Coordinator-based consensus building
-- Ranking rules by plausibility and confidence
-- Configurable discussion rounds
-
-### Utilities (`utils.py`)
-Ranking and evaluation functions for knowledge graph completion tasks.
-
-## Installation
-
-```bash
-pip install -r requirements.txt
-```
-
-## Configuration
-
-Set API keys in `llm/call_models.py`:
-```python
-os.environ["OPENAI_API_KEY"] = "your_key"
-os.environ["ANTHROPIC_API_KEY"] = "your_key" 
-os.environ["GEMINI_API_KEY"] = "your_key"
-```
+- `call_models.py`: model wrappers; add your model here to use it everywhere (OpenAI, Anthropic, Google, Ollama).
+- `consensus_llms.py`: consensus coordinator/agents scaffolding.
 
 ## Usage
 
-### Basic Rule Generation
-```bash
-python main_SOLAR.py --dataset yago --prompt_type c2r_new --model_name gpt-4o
-```
+### SOLAR Modes: Consensus vs Pool
 
-### Parameters
-- `--dataset`: Dataset name (yago, dbpedia, family, etc.)
-- `--prompt_type`: Prompt strategy (c2r_new, base, cot, etc.)
-- `--schema_type`: Schema format (graph, line, domain_range)
-- `--model_name`: LLM model to use
-- `--numbodyatoms`: Number of atoms in rule body (default: 2)
-- `-m`: Number of rules to generate (default: 10)
-- `--dry_run`: Generate queries without calling LLM
+- SPCA^{consensus} (multi‑agent consensus)
+  - A coordinator model generates rules, then multiple agents debate and the coordinator summarizes a consensus.
+  - Run: `python main_SOLAR.py --dataset yago --schema_type line --spca_mode consensus --coordinator_model ollama_qwen2.5:latest`
+  - Outputs: `gen_rules/<dataset>/<prompt>/<schema>/<k>/consensus_<coordinator>`
 
-### Schema-Aware Generation
-```python
-from SchemaRuleGenerator import RuleGenerator
+- SPCA^{pool} (independent evaluators + Borda)
+  - Phase 1 (generation): a SINGLE coordinator generates the candidate set R.
+    - `python main_SOLAR.py --dataset yago --schema_type line --spca_mode pool --coordinator_model ollama_qwen2.5:latest`
+  - Phase 2 (evaluation + aggregation): a pool of LLMs ranks R; Borda aggregates.
+    - `python -m quality_llm.pool.pool_llm_quality_full gen_rules/<ds>/<prompt>/<schema>/<k>/pool_<coord> --dataset-root dataset --agent-models <m1> <m2> ... --out aggregated_pool.csv`
+  - Layout:
+    - `<pool_dir>/Coordinator_<coord>/*_candidates.rules`, `*_schema.txt`
+    - `<pool_dir>/Agent*/*_pool.query`, `<pool_dir>/Agent*/*_pool.txt`
+    - `<pool_dir>/aggregated_pool.csv`
 
-generator = RuleGenerator("path/to/domain_and_range.txt")
-subgraph = generator.extract_subschema(schema, "target_predicate", max_length=2)
-rules = generator.generate_rules(subgraph, "target_predicate", path_length=2)
-```
-
-### Consensus Evaluation
-```python
-from llm.consensus_llms import simulate_consensus_discussion
-
-consensus = simulate_consensus_discussion(
-    coordinator_llm=coordinator,
-    agents=agent_dict,
-    rules=rule_string,
-    schema=schema_string,
-    rounds=3
-)
-```
 
 ## Output
 
@@ -125,49 +48,65 @@ gen_rules/
 │   │   │   │       └── predicate.query (input prompt)
 ```
 
-## Dependencies
+## Quality (quality_llm)
 
-Key requirements:
-- `torch>=2.4.1` - Deep learning framework
-- `transformers>=4.44.1` - Hugging Face transformers
-- `llama-index-core>=0.11.10` - LLM framework
-- `openai>=1.46.0` - OpenAI API
-- `anthropic>=0.28.1` - Anthropic API
-- `tiktoken>=0.7.0` - Token counting
-- `tqdm>=4.66.1` - Progress bars
+The `quality_llm` package contains evaluation tools for both SOLAR modes. Paths are resolved relative to the repo root; prompts are read from `prompt/`.
 
-Requirements
+Consensus (one‑shot)
+- Entrypoint: `python -m quality_llm.consensus.consensus_llm_quality_full <consensus_dir>`
+- Input: `gen_rules/<ds>/<prompt>/<schema>/<k>/consensus_<coord>/` (contains `<predicate>_consensus.txt`)
+- Actions:
+  - Extracts rules into JSON (`consensus_rules.json`).
+  - Computes SCS (Schema Consistency), SeCS (Semantic Coherence), CovS (Coverage) per predicate.
+  - Writes CSV (`--csv-out`, default `consensus_quality.csv`).
+- Multi‑model SeCS:
+  - `--semantic --sim-models <m1> <m2> ... --multi-out consensus_multi_models.csv`
+  - If `--sim-models` omitted, uses a version‑aware recommended set from `get_default_similarity_models()`.
 
-Python 3.8+
+Pool (two‑phase)
+- Phase 1 is generation done by `main_SOLAR.py --spca_mode pool`.
+- Phase 2 Entrypoint: `python -m quality_llm.pool.pool_llm_quality_full <pool_dir> --dataset-root dataset --agent-models <m1> <m2> ... --out aggregated_pool.csv`
+- Input structure expected under `<pool_dir>`:
+  - `Coordinator_<coord>/<predicate>_candidates.rules` and `<predicate>_schema.txt` (produced in Phase 1)
+  - The runner creates per‑agent folders: `Agent*/*_pool.query` and `Agent*/*_pool.txt`
+- Evaluator prompt and normalization:
+  - Candidates are shown as a numbered list `1) <rule>`, `2) <rule>`, ...
+  - Each evaluator returns ONLY the ranking of indices (e.g., `3 1 2` or `[3,1,2]`).
+  - Outputs are normalized and completed to a full permutation of the candidate set.
+- Aggregation:
+  - Borda scoring combines independent rankings; writes `<pool_dir>/aggregated_pool.csv`.
+  - Cleaning maps agent output back to canonical candidate rules; spurious lines are ignored.
 
-Lllamaindex (to query multiple LLM models with the same interface)
+Shared utilities
+- `quality_llm/common/SchemaQualityMeasures_full.py`:
+  - `SchemaLevelEvaluator`: SCS/SeCS/CovS (single model) and rule parsing.
+  - `evaluate_rules_multi_models(schema, rules, target, models)`: multi‑model SeCS with shared SCS/CovS.
+  - `get_default_similarity_models()`: version‑aware recommended SentenceTransformer list.
+- `quality_llm/common/RuleExtractor.py`: robust parsing of rules from text files.
 
-OpenAI API key (for GPT models)
+Running from subdirectories
+- Tools auto‑detect repo root and accept absolute or relative paths.
+- If you run from `quality_llm/` subfolders, imports fall back to sibling/package paths automatically.
 
-Ollama (for open source models)
+Path tips:
+- Works as module or script; resolves relative paths against repo root.
+- Prompts live under `<repo_root>/prompt/` (not per dataset).
+  - Pool: `prompt/spca_pool_prompt.txt`
+  - Consensus: `prompt/consensus_prompt.txt`, `prompt/consensus_user_instruction.txt`
+- Override repo root via `REPO_ROOT=/path/to/SOLAR` if needed.
 
-Google API key (for Gemini models)
 
-Anthropic API key (for Claude models)
+## Installation
 
---
-Configuration
+```bash
+pip install -r requirements.txt
+```
 
-Set up API keys in environment variables:
+## Configuration
 
-export OPENAI_API_KEY="your-key"
-
-export GOOGLE_API_KEY="your-key"
-
-export ANTHROPIC_API_KEY="your-key"
---
-Install Ollama and required models:
-
-curl https://ollama.ai/install.sh | sh
-
-ollama pull llama3.2:latest
-
-ollama pull deepseek-r1:70b
-
-ollama pull qwen2.5
-
+Set API keys in `llm/call_models.py`:
+```python
+os.environ["OPENAI_API_KEY"] = "your_key"
+os.environ["ANTHROPIC_API_KEY"] = "your_key" 
+os.environ["GEMINI_API_KEY"] = "your_key"
+```
