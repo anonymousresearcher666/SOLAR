@@ -1,4 +1,3 @@
-<meta name="robots" content="noindex">
 # SOLAR — Schema-Only Learning And Rule-extraction with Large Language Models
 
 SOLAR learns and ranks logical rules directly from knowledge‑graph schemas using LLMs. It supports two complementary ranking paths: a multi‑agent consensus debate and an independent evaluator pool aggregated via Borda. SOLAR is model‑agnostic — any LLM wired into `llm/call_models.py` can be used (OpenAI, Anthropic, Google, or local via Ollama).
@@ -11,7 +10,7 @@ Generation and SPCA ranking orchestrator:
 - Runs SPCA^{consensus} (debate) or SPCA^{pool} (independent ranking)
 
 ### LLM Integration (`llm/`)
-- `call_models.py`: model wrappers; add your model here to use it everywhere (OpenAI, Anthropic, Google, Ollama).
+- `call_models.py`: model wrappers; plug in any LLM here. SOLAR is model-agnostic: works with proprietary hosted models (OpenAI, Anthropic, Google via API keys) or fully local models via Ollama. To use an Ollama model, prefix the model name with `ollama_` (e.g., `ollama_qwen2.5:latest`).
 - `consensus_llms.py`: consensus coordinator/agents scaffolding.
 
 ## Usage
@@ -109,4 +108,80 @@ Set API keys in `llm/call_models.py`:
 os.environ["OPENAI_API_KEY"] = "your_key"
 os.environ["ANTHROPIC_API_KEY"] = "your_key" 
 os.environ["GEMINI_API_KEY"] = "your_key"
+```
+  
+## Retrieval-Augmented Generation (RAG)
+
+For domain- or niche-specific knowledge, SOLAR can incorporate external documents via RAG:
+
+### Building an Index
+```bash
+# Build a RAG index for a domain from a folder of .txt/.md documents
+python -m rag.cli build \
+  --domain family_es \
+  --docs dataset/family/spanish_docs
+```
+
+By default this creates a persistent index under `rag_store/<domain>/`.  Use `--store` to change the root directory.
+
+### Querying the Index
+```bash
+python -m rag.cli query \
+  --domain family_es \
+  --q "isParentOf(X,Y) and gender" \
+  --top_k 3
+```
+Retrieval hits (scores and snippets) are printed.  To feed RAG context into SOLAR, pass `--rag_domain` (and optional `--rag_top_k`, `--rag_min_score`) to `main_SOLAR.py`:
+```bash
+python main_SOLAR.py \
+  --dataset family \
+  --language spanish \
+  --schema_type line \
+  --prompt_type c2r_new \
+  --spca_mode consensus \
+  --coordinator_model ollama_qwen2.5:latest \
+  --rule_path gen_rules \
+  --rag_domain family_es \
+  [--rag_top_k 5] [--rag_min_score 0.1]
+```
+Alternatively, the helper script `run_rag.py` will build (or reuse) the index under `dataset/<name>/rag_data`, run a demo query, and launch SOLAR with RAG context:
+```bash
+python -m rag.run_rag --dataset family --language spanish --spca_mode pool
+```
+
+## Universal Schema & Rule Mapping
+
+SOLAR can generate rules on a universal schema (e.g. Schema.org) then translate them to your KG’s vocabulary using the `mapping` module.
+
+### Learning on Schema.org
+```bash
+python main_SOLAR.py \
+  --dataset schemadotorg \
+  --schema_type line \
+  --prompt_type c2r_new \
+  --spca_mode pool \
+  --coordinator_model ollama_qwen2.5:latest
+```
+Rules appear under `gen_rules/schemadotorg/c2r_new/line/.../pool_<model>/Coordinator_<model>/`.
+
+### Mapping to Your KG
+Translate predicates via a JSON mapping:
+```bash
+python -m mapping.cli dir \
+  --src gen_rules/schemadotorg/.../Coordinator_ollama_qwen2.5/*_candidates.rules \
+  --map mapping/maps/schemadotorg_to_family.json \
+  --target-line-graph dataset/family/line_graph.txt \
+  --out mapped_rules/family \
+  --strict
+```
+Or compute the mapping automatically:
+```bash
+python -m mapping.cli match \
+  --src-line-graph additional_datasets/schemadotorg/line_graph.txt \
+  --tgt-line-graph dataset/family/line_graph.txt \
+  --out mapping/maps/schemadotorg_to_family.json
+```
+Inspect saved mappings:
+```bash
+python -m mapping.cli report --mapping mapping/maps/schemadotorg_to_family.json --limit 5
 ```
