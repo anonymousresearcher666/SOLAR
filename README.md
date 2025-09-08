@@ -332,11 +332,4 @@ export REPO_ROOT=/path/to/SOLAR
 1. **Missing API keys**: Ensure all required keys are set in `llm/call_models.py`
 2. **Path errors**: Verify repository structure and REPO_ROOT if needed
 3. **Model timeouts**: Adjust timeout settings for slower local models
-4. **Memory issues**: Use sub-schema extraction for large schemas
 
-## Contributing
-
-When adding new models:
-1. Add wrapper function in `llm/call_models.py`
-2. Update model lists in quality evaluation tools
-3. Test with both consensus and pool modes
