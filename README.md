@@ -10,6 +10,7 @@ SOLAR learns and ranks logical rules directly from knowledge graph schemas using
 - **Two ranking approaches**: Consensus debate (SPCA^consensus) and independent evaluation pool (SPCA^pool)
 - **Few-shot support**: Optional injection of structural examples to guide generation
 - **Comprehensive evaluation**: Schema-level metrics (SCS, SeCS, CovS) and standard link prediction metrics
+- **AMIE integration (optional)**: Seed AMIE’s search with SOLAR rules via a custom MiningAssistant (see `amie_integration/PIPELINE.md`)
 
 ## Installation
 
@@ -65,6 +66,7 @@ python -m quality_llm.pool.pool_llm_quality_full \
 - **`llm/call_models.py`**: Model wrappers for different LLM providers
 - **`llm/consensus_llms.py`**: Multi-agent consensus coordination
 - **`quality_llm/`**: Evaluation tools and metrics
+- **`amie_integration/`**: Exporters, assistant, and runners to bias AMIE with SOLAR seeds
 
 ### Two Ranking Modes
 
@@ -200,6 +202,86 @@ python -m quality_llm.consensus.run_consensus_votes \
 **Output:**
 - `votes_raw.csv`: Per-participant, per-rule votes
 - `votes_agg.csv`: Aggregated votes with SPCA_consensus scores
+
+## AMIE Integration
+
+Bias AMIE’s search with SOLAR seeds via a custom MiningAssistant.
+
+Full guide: `amie_integration/PIPELINE.md`.
+
+Quick steps
+- Export seeds (2-column TSV: `head\tbody`):
+  ```bash
+  python amie_integration/export_solar_seeds.py \
+    --solar-run gen_rules/<ds>/<prompt>/<schema>/<k>/consensus_<coord>_N
+  ```
+  Output: `amie_integration/out/<dataset>_amie_seeds.tsv`
+
+- Build assistant (choose one):
+  - Maven (includes assistant in AMIE jar):
+    ```bash
+    cd amie_integration/AMIE && mvn -DskipTests package
+    ```
+  - Tiny jar (compile assistant only):
+    ```bash
+    AMIE_JAR=amie_integration/AMIE/amie-dev.jar \
+    ./amie_integration/build_solar_assistant.sh
+    ```
+
+- Run AMIE with seeds:
+  - Python subprocess (recommended):
+    ```bash
+    export AMIE_JAR=amie_integration/AMIE/target/amie.jar  # or amie_integration/AMIE/amie-dev.jar
+    python amie_integration/run_amie_subprocess.py \
+      --facts dataset/<ds>/facts.txt \
+      --seeds amie_integration/out/<dataset>_amie_seeds.tsv \
+      --amie-args -minhc 0.01 -mins 5 -minpca 0.01
+    ```
+  - Shell wrapper:
+    ```bash
+    AMIE_ROOT=$(pwd)/amie_integration/AMIE \
+    ./amie_integration/run_amie_with_seeds.sh \
+      amie_integration/out/<dataset>_amie_seeds.tsv \
+      dataset/<ds>/facts.txt
+    ```
+
+## Release Instructions
+
+Use this checklist to prepare and publish a clean release of SOLAR with optional AMIE integration.
+
+- Prerequisites
+  - Python 3.9+ and `pip`
+  - Optional (for AMIE integration): Java JDK (javac/java) and Maven if rebuilding AMIE
+
+- Install dependencies
+  - `pip install -r requirements.txt`
+
+- Basic runs (schema-only)
+  - Consensus (example):
+    - `python main_SOLAR.py --dataset family --schema_type line --spca_mode consensus --coordinator_model ollama_qwen2.5:latest`
+  - Pool (phase 1):
+    - `python main_SOLAR.py --dataset family --schema_type line --spca_mode pool --coordinator_model ollama_qwen2.5:latest`
+  - Few-shot examples (fs):
+    - `python main_SOLAR.py --dataset family --schema_type line --spca_mode consensus --coordinator_model ollama_qwen2.5:latest --prompt_type fs --numex 3`
+
+- AMIE integration (external, not vendored)
+  - Export seeds (2-column TSV):
+    - `python amie_integration/export_solar_seeds.py --solar-run gen_rules/<ds>/<prompt>/<schema>/<k>/consensus_<coord>_N`
+    - Output: `amie_integration/out/<dataset>_amie_seeds.tsv`
+  - Fetch AMIE locally (kept out of git):
+    - `./amie_integration/fetch_amie.sh`
+  - Build assistant into AMIE (option A):
+    - `cd amie_integration/AMIE && mvn -DskipTests package`
+  - Or build a small assistant jar (option B):
+    - `AMIE_JAR=amie_integration/AMIE/amie-dev.jar ./amie_integration/build_solar_assistant.sh`
+  - Run AMIE with seeds (Python subprocess):
+    - `export AMIE_JAR=amie_integration/AMIE/target/amie.jar`
+    - `python amie_integration/run_amie_subprocess.py --facts dataset/<ds>/facts.txt --seeds amie_integration/out/<dataset>_amie_seeds.tsv --amie-args -minhc 0.01 -mins 5 -minpca 0.01`
+
+- Packaging notes
+  - The AMIE repository is not included in this repo. The helper `amie_integration/fetch_amie.sh` clones it locally (ignored by git).
+  - Do not commit large datasets or generated artifacts. The repo ignores `amie_integration/AMIE/` and build outputs.
+  - Provide a short “Getting Started” in your release description with the commands above.
 
 ## Advanced Features
 
